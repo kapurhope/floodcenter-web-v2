@@ -4,6 +4,17 @@ React (Create React App) dashboard for **floodcenter-backend-v2**. Same map + mo
 
 **Do not point this app at `floodcenter-backend` (production).** `src/firebase.js` reads the Firebase web config from `REACT_APP_*` env vars and refuses to start if the project id is `floodcenter-backend`. Hosting deploys to the default site of the v2 project (`https://floodcenter-backend-v2.web.app`).
 
+## Branches and environments
+
+One Firebase project for now: **`floodcenter-backend-v2`** (Hosting + Firestore + Functions). No separate test database until the product is stable.
+
+| Branch | Role |
+| --- | --- |
+| `develop` | Integration branch — day-to-day work and PRs land here. Does **not** auto-deploy. |
+| `main` | Release branch — merge from `develop` when ready. CI deploys Hosting here. |
+
+Local check: `npm start` with `.env.local`. Ship UI: merge to `main`, or `npm run build` + `firebase deploy --only hosting` from a clean tree. Add a `…-v2-test` project later only if you need isolated data.
+
 ## What changed vs v1
 
 | Area | v1 | v2 |
