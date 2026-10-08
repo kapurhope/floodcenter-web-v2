@@ -37,6 +37,7 @@ import {
 } from './units';
 import {
   alertBands,
+  appendLatest,
   breakAtGaps,
   expandDailyDocs,
   FORECAST_HORIZON_HOURS,
@@ -56,6 +57,8 @@ import {
 import './Dashboard.css';
 
 const TOOLTIP_MAX_PX = 40;
+/** Floor for rain axis suggestedMax so drizzle doesn't stretch to fill the plot. */
+const RAIN_AXIS_MIN_MM = 0.5;
 
 /**
  * Hover picks the point nearest the cursor in x from each series separately.
@@ -280,18 +283,27 @@ const SensorDashboard = ({ deviceId, sensor: sensorFromList, unitSystem, onUnitS
     if (!shown) return null;
     const { range: r, water, rain, bands } = shown;
     const forecast = r.showForecast ? forecastSeries(status.forecast, r.nowMs) : [];
+    // 5-minute rain bars at barThickness 10 overlap on a 24 h axis.
+    const rainMinutes = Math.max(r.bucketMinutes, 15);
+    const waterBuckets = appendLatest(
+      maxByBucket(water, r.bucketMinutes),
+      status.latest,
+      r.startMs,
+      r.endMs,
+    );
     return {
       range: r,
+      rainMinutes,
       water,
       bands,
-      waterBuckets: breakAtGaps(maxByBucket(water, r.bucketMinutes), r.bucketMinutes),
-      rainObserved: rainByBucket(rain.observed, r.bucketMinutes, r.startMs, Math.min(r.endMs, r.nowMs)),
+      waterBuckets: breakAtGaps(waterBuckets, r.bucketMinutes),
+      rainObserved: rainByBucket(rain.observed, rainMinutes, r.startMs, Math.min(r.endMs, r.nowMs)),
       rainForecast: r.showForecast
-        ? rainByBucket(rain.forecast, r.bucketMinutes, r.nowMs, r.xMaxMs)
+        ? rainByBucket(rain.forecast, rainMinutes, r.nowMs, r.xMaxMs)
         : [],
       forecast,
     };
-  }, [shown, status.forecast]);
+  }, [shown, status.forecast, status.latest]);
 
   const stats = useMemo(() => {
     const water = series ? series.water : [];
@@ -366,38 +378,41 @@ const SensorDashboard = ({ deviceId, sensor: sensorFromList, unitSystem, onUnitS
         order: 1,
       });
     }
-    if (view !== 'year') {
-      const barThickness = r.bucketMinutes <= 15 ? 10 : 4;
-      if (series.rainObserved.length) {
-        datasets.push({
-          type: 'bar',
-          label: 'Rainfall',
-          data: series.rainObserved.map((p) => ({ x: p.t, y: rain(p.mm) })),
-          backgroundColor: 'rgba(54, 162, 235, 0.55)',
-          borderColor: 'rgb(54, 162, 235)',
-          barThickness,
-          grouped: false,
-          yAxisID: 'y1',
-          order: 2,
-        });
-      }
-      if (series.rainForecast.length) {
-        datasets.push({
-          type: 'bar',
-          label: 'Rain forecast',
-          data: series.rainForecast.map((p) => ({ x: p.t, y: rain(p.mm) })),
-          backgroundColor: 'rgba(54, 162, 235, 0.22)',
-          borderColor: 'rgb(54, 162, 235)',
-          borderWidth: 1,
-          barThickness,
-          grouped: false,
-          yAxisID: 'y1',
-          order: 2,
-        });
-      }
+    const { rainMinutes } = series;
+    let barThickness = 4;
+    if (rainMinutes <= 15) barThickness = 10;
+    else if (rainMinutes >= 24 * 60) barThickness = 2;
+    if (series.rainObserved.length) {
+      datasets.push({
+        type: 'bar',
+        label: 'Rainfall',
+        data: series.rainObserved.map((p) => ({ x: p.t, y: rain(p.mm) })),
+        backgroundColor: 'rgba(54, 162, 235, 0.85)',
+        borderColor: 'rgb(54, 162, 235)',
+        barThickness,
+        minBarLength: 3,
+        grouped: false,
+        yAxisID: 'y1',
+        order: 2,
+      });
+    }
+    if (series.rainForecast.length) {
+      datasets.push({
+        type: 'bar',
+        label: 'Rain forecast',
+        data: series.rainForecast.map((p) => ({ x: p.t, y: rain(p.mm) })),
+        backgroundColor: 'rgba(54, 162, 235, 0.25)',
+        borderColor: 'rgb(54, 162, 235)',
+        borderWidth: 1,
+        barThickness,
+        minBarLength: 3,
+        grouped: false,
+        yAxisID: 'y1',
+        order: 2,
+      });
     }
     return { datasets };
-  }, [series, unitSystem, view, yellowMm, redMm]);
+  }, [series, unitSystem, yellowMm, redMm]);
 
   const chartOptions = useMemo(() => {
     if (!series) return null;
@@ -413,7 +428,7 @@ const SensorDashboard = ({ deviceId, sensor: sensorFromList, unitSystem, onUnitS
       100
     );
     const rainPeakMm = Math.max(maxMm(series.rainObserved) || 0, maxMm(series.rainForecast) || 0);
-    const showRainAxis = view !== 'year';
+    const rainBucketLabel = series.rainMinutes >= 24 * 60 ? 'day' : `${series.rainMinutes} min`;
 
     return {
       responsive: true,
@@ -480,17 +495,16 @@ const SensorDashboard = ({ deviceId, sensor: sensorFromList, unitSystem, onUnitS
           ticks: { callback: (v) => `${formatAxisNumber(v)} ${wUnit}` },
         },
         y1: {
-          display: showRainAxis,
           position: 'right',
           min: 0,
-          max: rainFromMm(Math.max(rainPeakMm * 3, 1), unitSystem),
+          suggestedMax: rainFromMm(Math.max(rainPeakMm * 1.25, RAIN_AXIS_MIN_MM), unitSystem),
           grid: { drawOnChartArea: false },
-          title: { display: showRainAxis, text: `Rainfall (${rUnit})` },
+          title: { display: true, text: `Rainfall (${rUnit} per ${rainBucketLabel})` },
           ticks: { callback: (v) => `${formatAxisNumber(v)} ${rUnit}` },
         },
       },
     };
-  }, [series, unitSystem, view, yellowMm, redMm]);
+  }, [series, unitSystem, yellowMm, redMm]);
 
   const selectView = (next) => {
     setView(next);

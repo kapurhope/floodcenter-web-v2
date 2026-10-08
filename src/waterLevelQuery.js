@@ -24,7 +24,7 @@ export const VIEWS = {
   day: {
     label: 'Day',
     note: 'Day: 5‑minute maxes from waterLevel_daily. Dashed line = physics forecast next 6 h. Alert banner from rain rule (~15 min refresh).',
-    bucketMinutes: 15,
+    bucketMinutes: 5,
     hoursBack: 18,
     showForecast: true,
     timeUnit: 'hour',
@@ -55,7 +55,7 @@ export const VIEWS = {
   },
   year: {
     label: 'Year',
-    note: 'Year: daily maxes from daily rollups. One point per day.',
+    note: 'Year: daily maxes from daily rollups. One point per day. Bars = daily rain.',
     bucketMinutes: 24 * 60,
     hoursBack: 24 * 365,
     showForecast: false,
@@ -214,6 +214,15 @@ export const maxByBucket = (points, bucketMinutes) => {
     if (prev == null || mm > prev) buckets.set(key, mm);
   }
   return Array.from(buckets, ([t, mm]) => ({ t, mm })).sort((a, b) => a.t - b.t);
+};
+
+/** Appends the live reading when it is newer than the last point and inside [startMs, endMs]. */
+export const appendLatest = (points, latest, startMs, endMs) => {
+  if (!latest || latest.atMs == null || !Number.isFinite(latest.levelMm)) return points;
+  if (latest.atMs < startMs || latest.atMs > endMs) return points;
+  const last = points[points.length - 1];
+  if (last && latest.atMs <= last.t) return points;
+  return [...points, { t: latest.atMs, mm: latest.levelMm }];
 };
 
 /**

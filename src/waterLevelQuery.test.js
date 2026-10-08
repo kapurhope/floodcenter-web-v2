@@ -1,5 +1,6 @@
 import {
   alertBands,
+  appendLatest,
   breakAtGaps,
   dailyDocBounds,
   expandDailyDocs,
@@ -31,7 +32,21 @@ test('day view covers 18 h back and a 6 h forecast', () => {
   expect(r.endMs).toBe(NOW);
   expect(r.xMaxMs).toBe(NOW + 6 * HOUR);
   expect(r.showForecast).toBe(true);
-  expect(r.bucketMinutes).toBe(15);
+  expect(r.bucketMinutes).toBe(5);
+});
+
+test('5-minute display buckets pass points through unchanged', () => {
+  const points = [{ t: NOW - 10 * MIN, mm: 1 }, { t: NOW - 5 * MIN, mm: 2 }];
+  expect(maxByBucket(points, 5)).toBe(points);
+});
+
+test('latest reading tips the series only when newer and in range', () => {
+  const points = [{ t: NOW - 10 * MIN, mm: 100 }];
+  expect(appendLatest(points, { atMs: NOW - 2 * MIN, levelMm: 110 }, NOW - HOUR, NOW))
+    .toEqual([...points, { t: NOW - 2 * MIN, mm: 110 }]);
+  expect(appendLatest(points, { atMs: NOW - 20 * MIN, levelMm: 110 }, NOW - HOUR, NOW)).toBe(points);
+  expect(appendLatest(points, { atMs: NOW + MIN, levelMm: 110 }, NOW - HOUR, NOW)).toBe(points);
+  expect(appendLatest(points, null, NOW - HOUR, NOW)).toBe(points);
 });
 
 test('longer views end at now without a forecast', () => {
