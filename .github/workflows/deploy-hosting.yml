@@ -46,12 +46,12 @@ jobs:
         run: npm test -- --watchAll=false
 
       - name: Build
-        run: npm run build
+        # Strip UTF-8 BOM from secrets/vars (PowerShell Set-Content often adds one).
         env:
           REACT_APP_FIREBASE_API_KEY: ${{ secrets.REACT_APP_FIREBASE_API_KEY }}
           REACT_APP_FIREBASE_AUTH_DOMAIN: ${{ env.PROJECT_ID }}.firebaseapp.com
           REACT_APP_FIREBASE_PROJECT_ID: ${{ env.PROJECT_ID }}
-          REACT_APP_FIREBASE_STORAGE_BUCKET: ${{ env.PROJECT_ID }}.appspot.com
+          REACT_APP_FIREBASE_STORAGE_BUCKET: ${{ env.PROJECT_ID }}.firebasestorage.app
           REACT_APP_FIREBASE_MESSAGING_SENDER_ID: ${{ vars.REACT_APP_FIREBASE_MESSAGING_SENDER_ID }}
           REACT_APP_FIREBASE_APP_ID: ${{ vars.REACT_APP_FIREBASE_APP_ID }}
           REACT_APP_FIREBASE_MEASUREMENT_ID: ${{ vars.REACT_APP_FIREBASE_MEASUREMENT_ID }}
@@ -60,6 +60,12 @@ jobs:
           REACT_APP_DEFAULT_MAP_LAT: ${{ vars.REACT_APP_DEFAULT_MAP_LAT }}
           REACT_APP_DEFAULT_MAP_LNG: ${{ vars.REACT_APP_DEFAULT_MAP_LNG }}
           REACT_APP_REQUIRE_LOGIN: ${{ vars.REACT_APP_REQUIRE_LOGIN || 'false' }}
+        run: |
+          strip() { printf '%s' "$1" | sed $'s/^\xEF\xBB\xBF//'; }
+          export REACT_APP_FIREBASE_API_KEY="$(strip "$REACT_APP_FIREBASE_API_KEY")"
+          export REACT_APP_GOOGLE_MAPS_API_KEY="$(strip "$REACT_APP_GOOGLE_MAPS_API_KEY")"
+          export REACT_APP_GOOGLE_MAPS_ID="$(strip "$REACT_APP_GOOGLE_MAPS_ID")"
+          npm run build
 
       - name: Install Firebase CLI
         run: npm install -g firebase-tools@13

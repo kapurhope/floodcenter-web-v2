@@ -23,8 +23,8 @@ const defaultCenter = {
 const libraries = ['marker', 'maps'];
 
 const mapOptions = {
-  // Advanced markers need a map ID; DEMO_MAP_ID works for local development.
-  mapId: process.env.REACT_APP_GOOGLE_MAPS_ID || 'DEMO_MAP_ID',
+  // Advanced markers need a *vector* Map ID from Google Cloud Map Management.
+  mapId: (process.env.REACT_APP_GOOGLE_MAPS_ID || 'DEMO_MAP_ID').replace(/^\uFEFF/, '').trim(),
   disableDefaultUI: false,
   zoomControl: true,
   streetViewControl: true,
@@ -87,9 +87,11 @@ const SensorMap = ({ sensors, unitSystem, onSensorSelect }) => {
   const paintRef = useRef(() => {});
   const onSelectRef = useRef(onSensorSelect);
 
+  // Trim BOM/whitespace — PowerShell/UTF-8 env files sometimes prefix U+FEFF.
+  const mapsApiKey = (process.env.REACT_APP_GOOGLE_MAPS_API_KEY || '').replace(/^\uFEFF/, '').trim();
   const { isLoaded, loadError } = useJsApiLoader({
     id: 'google-map-script',
-    googleMapsApiKey: process.env.REACT_APP_GOOGLE_MAPS_API_KEY,
+    googleMapsApiKey: mapsApiKey,
     libraries,
   });
 
