@@ -1,4 +1,5 @@
 import {
+  alertBands,
   breakAtGaps,
   dailyDocBounds,
   expandDailyDocs,
@@ -122,6 +123,34 @@ test('maxMm handles a year of 5-minute points', () => {
   const points = Array.from({ length: 365 * 288 }, (_, i) => ({ t: i, mm: i % 1000 }));
   expect(maxMm(points)).toBe(999);
   expect(maxMm([])).toBeNull();
+});
+
+test('alert bands split levels and hold-down, clip, and prefer live over replay', () => {
+  const replay = {
+    mode: 'replay-issued',
+    startMs: NOW - 20 * HOUR,
+    endMs: NOW - 8 * HOUR,
+    ruleClearedMs: NOW - 14 * HOUR,
+    levels: [{ atMs: NOW - 20 * HOUR, level: 'yellow' }, { atMs: NOW - 17 * HOUR, level: 'red' }],
+    peakLevel: 'red',
+  };
+  expect(alertBands([replay], NOW - 18 * HOUR, NOW, NOW)).toEqual([
+    { startMs: NOW - 18 * HOUR, endMs: NOW - 17 * HOUR, level: 'yellow', hold: false, replay: true },
+    { startMs: NOW - 17 * HOUR, endMs: NOW - 14 * HOUR, level: 'red', hold: false, replay: true },
+    { startMs: NOW - 14 * HOUR, endMs: NOW - 8 * HOUR, level: 'red', hold: true, replay: true },
+  ]);
+
+  const live = {
+    mode: 'live',
+    startMs: NOW - 10 * HOUR,
+    endMs: null,
+    ruleClearedMs: null,
+    levels: [{ atMs: NOW - 10 * HOUR, level: 'yellow' }],
+    peakLevel: 'yellow',
+  };
+  expect(alertBands([replay, live], NOW - 18 * HOUR, NOW, NOW)).toEqual([
+    { startMs: NOW - 10 * HOUR, endMs: NOW, level: 'yellow', hold: false, replay: false },
+  ]);
 });
 
 test('forecast series is clipped to 6 h and hidden when stale', () => {

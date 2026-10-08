@@ -17,7 +17,13 @@ import { getRelativePosition } from 'chart.js/helpers';
 import { Chart } from 'react-chartjs-2';
 import 'chartjs-adapter-date-fns';
 import zoomPlugin from 'chartjs-plugin-zoom';
-import { fetchDailyDocs, fetchDeviceStatus, fetchRainRows, fetchSensorLocation } from './sensorData';
+import {
+  fetchAlertHistory,
+  fetchDailyDocs,
+  fetchDeviceStatus,
+  fetchRainRows,
+  fetchSensorLocation,
+} from './sensorData';
 import {
   formatRain,
   formatWater,
@@ -30,6 +36,7 @@ import {
   waterUnit,
 } from './units';
 import {
+  alertBands,
   breakAtGaps,
   expandDailyDocs,
   FORECAST_HORIZON_HOURS,
@@ -75,6 +82,36 @@ Interaction.modes.nearestPerDataset = (chart, e, options, useFinalPosition) => {
   });
   return items;
 };
+
+const BAND_COLORS = {
+  yellow: { fire: 'rgba(249, 168, 37, 0.22)', hold: 'rgba(249, 168, 37, 0.10)' },
+  red: { fire: 'rgba(198, 40, 40, 0.18)', hold: 'rgba(198, 40, 40, 0.08)' },
+};
+
+/** Shades alert episodes (options.plugins.alertBands.bands) behind the datasets. */
+const alertBandsPlugin = {
+  id: 'alertBands',
+  beforeDatasetsDraw(chart, args, opts) {
+    const bands = opts && opts.bands;
+    const x = chart.scales.x;
+    if (!bands || !bands.length || !x) return;
+    const { ctx, chartArea } = chart;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(chartArea.left, chartArea.top, chartArea.right - chartArea.left, chartArea.bottom - chartArea.top);
+    ctx.clip();
+    for (const band of bands) {
+      const colors = BAND_COLORS[band.level];
+      if (!colors) continue;
+      const x0 = x.getPixelForValue(band.startMs);
+      const x1 = x.getPixelForValue(band.endMs);
+      ctx.fillStyle = band.hold ? colors.hold : colors.fire;
+      ctx.fillRect(x0, chartArea.top, Math.max(x1 - x0, 1), chartArea.bottom - chartArea.top);
+    }
+    ctx.restore();
+  },
+};
+const CHART_PLUGINS = [alertBandsPlugin];
 
 ChartJS.register(
   BarController,
@@ -200,15 +237,21 @@ const SensorDashboard = ({ deviceId, sensor: sensorFromList, unitSystem, onUnitS
     Promise.all([
       fetchDailyDocs(deviceId, range.startMs, range.endMs),
       fetchRainRows(deviceId, range.startMs, range.xMaxMs),
+      // Alert shading is optional; the chart still draws without it.
+      fetchAlertHistory(deviceId, range.startMs, range.endMs).catch((err) => {
+        console.error('[SensorDashboard] alert_history:', err);
+        return [];
+      }),
     ])
-      .then(([dailyDocs, rainRows]) => {
+      .then(([dailyDocs, rainRows, episodes]) => {
         if (cancelled) return;
-        debugLog(`${dailyDocs.length} daily docs, ${rainRows.length} rain rows`);
+        debugLog(`${dailyDocs.length} daily docs, ${rainRows.length} rain rows, ${episodes.length} alert episodes`);
         setHistory({
           key: viewKey,
           range,
           water: expandDailyDocs(dailyDocs, range.startMs, range.endMs),
           rain: normalizeRainRows(rainRows, range.nowMs),
+          bands: alertBands(episodes, range.startMs, range.endMs, range.nowMs),
           error: null,
         });
       })
@@ -221,6 +264,7 @@ const SensorDashboard = ({ deviceId, sensor: sensorFromList, unitSystem, onUnitS
           range,
           water: [],
           rain: EMPTY_RAIN,
+          bands: [],
           error: err.message || String(err),
         }));
       });
@@ -234,11 +278,12 @@ const SensorDashboard = ({ deviceId, sensor: sensorFromList, unitSystem, onUnitS
 
   const series = useMemo(() => {
     if (!shown) return null;
-    const { range: r, water, rain } = shown;
+    const { range: r, water, rain, bands } = shown;
     const forecast = r.showForecast ? forecastSeries(status.forecast, r.nowMs) : [];
     return {
       range: r,
       water,
+      bands,
       waterBuckets: breakAtGaps(maxByBucket(water, r.bucketMinutes), r.bucketMinutes),
       rainObserved: rainByBucket(rain.observed, r.bucketMinutes, r.startMs, Math.min(r.endMs, r.nowMs)),
       rainForecast: r.showForecast
@@ -261,7 +306,9 @@ const SensorDashboard = ({ deviceId, sensor: sensorFromList, unitSystem, onUnitS
   }, [series, status.latest]);
 
   const crestMm = series ? maxMm(series.forecast) : null;
-  const alertBanner = describeAlert(status.alert, unitSystem, crestMm);
+  // The banner is the current alert, so it only belongs on a range that reaches now.
+  const rangeIncludesNow = !!range && range.endMs >= range.nowMs - 60 * 1000;
+  const alertBanner = rangeIncludesNow ? describeAlert(status.alert, unitSystem, crestMm) : null;
 
   const yellowMm = sensor?.yellowMm > 0 ? sensor.yellowMm : null;
   const redMm = sensor?.redMm > 0 ? sensor.redMm : null;
@@ -373,6 +420,7 @@ const SensorDashboard = ({ deviceId, sensor: sensorFromList, unitSystem, onUnitS
       maintainAspectRatio: false,
       interaction: { mode: 'nearestPerDataset', intersect: false },
       plugins: {
+        alertBands: { bands: series.bands },
         legend: {
           position: 'top',
           labels: { usePointStyle: true, padding: 16, boxWidth: 10 },
@@ -482,10 +530,13 @@ const SensorDashboard = ({ deviceId, sensor: sensorFromList, unitSystem, onUnitS
         type="line"
         data={chartData}
         options={chartOptions}
+        plugins={CHART_PLUGINS}
         aria-label="Water level chart"
       />
     );
   }
+  const bands = series ? series.bands : [];
+  const hasReplayBands = bands.some((b) => b.replay);
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -616,6 +667,15 @@ const SensorDashboard = ({ deviceId, sensor: sensorFromList, unitSystem, onUnitS
         <div className="view-note">{viewNote}</div>
 
         <div className="chart-container">{chartBody}</div>
+
+        {bands.length > 0 && (
+          <div className="alert-band-legend">
+            <span><i className="band-swatch band-yellow" /> Yellow alert</span>
+            <span><i className="band-swatch band-red" /> Red alert</span>
+            <span><i className="band-swatch band-hold" /> Lighter: 6 h hold-down after rain eased</span>
+            {hasReplayBands && <span>Past alerts are replayed from stored forecasts.</span>}
+          </div>
+        )}
 
         <div className="chart-footnote">
           {yellowMm != null && `Yellow ${formatWater(yellowMm, unitSystem)} · `}

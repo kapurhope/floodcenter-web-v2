@@ -266,6 +266,40 @@
   margin-bottom: 0.5rem;
 }
 
+.alert-band-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+  padding-top: 8px;
+  font-size: 0.8rem;
+  color: #555;
+}
+
+.alert-band-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.band-swatch {
+  display: inline-block;
+  width: 14px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.band-yellow {
+  background: rgba(249, 168, 37, 0.45);
+}
+
+.band-red {
+  background: rgba(198, 40, 40, 0.4);
+}
+
+.band-hold {
+  background: rgba(249, 168, 37, 0.18);
+}
+
 .chart-footnote {
   text-align: right;
   padding: 8px 0 0;

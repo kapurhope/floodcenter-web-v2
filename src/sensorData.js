@@ -5,7 +5,8 @@
  *   waterLevel_daily/{id}_{date}  deviceId, date, day, maxMm { 'HH:MM': mm }
  *   waterLevel_latest/{deviceId}  levelMm, at
  *   rainfall_data                 deviceId, timestamp (window end), periodStart, accumulationMinutes, rainfall, createdAt
- *   alerts/{deviceId}             level, reason, rainFwd6h, rainPast12h, holdDown, since, updatedAt
+ *   alerts/{deviceId}             level, reason, rainFwd6h, rainPast12h, holdDown, since, ruleClearedAt, updatedAt
+ *   alert_history/{episodeId}     deviceId, mode, startAt, ruleClearedAt, endAt, peakLevel, levels [{ at, level }]
  *   canal_forecasts/{deviceId}    issuedAt, modelId, points [{ t, waterLevelMm }]
  */
 import {
@@ -20,11 +21,15 @@ import {
   where,
 } from 'firebase/firestore';
 import { db } from './firebase';
-import { dailyDocBounds } from './waterLevelQuery';
+import { dailyDocBounds, toMs } from './waterLevelQuery';
 
 // Rain rows are keyed by window end; a 3-hour window ending this long after
 // the range still overlaps it.
 const MAX_RAIN_WINDOW_MS = 3 * 60 * 60 * 1000;
+// Episodes are queried by startAt; one that started this long before the
+// range can still overlap it. The longest replayed episode is about 3 days.
+const MAX_EPISODE_MS = 7 * 24 * 60 * 60 * 1000;
+const ALERT_HISTORY_MODES = ['live', 'replay-issued'];
 
 const numberOrNull = (value) => {
   const n = Number(value);
@@ -113,4 +118,37 @@ export const fetchRainRows = async (deviceId, startMs, endMs) => {
     orderBy('timestamp', 'asc')
   ));
   return snap.docs.map((d) => d.data());
+};
+
+/**
+ * alert_history episodes (live and replay-issued) that can overlap
+ * [startMs, endMs], as { id, mode, startMs, endMs (null = open), ruleClearedMs,
+ * levels [{ atMs, level }], peakLevel, dataQuality }.
+ */
+export const fetchAlertHistory = async (deviceId, startMs, endMs) => {
+  const snap = await getDocs(query(
+    collection(db, 'alert_history'),
+    where('deviceId', '==', deviceId),
+    where('mode', 'in', ALERT_HISTORY_MODES),
+    where('startAt', '>=', Timestamp.fromMillis(startMs - MAX_EPISODE_MS)),
+    where('startAt', '<=', Timestamp.fromMillis(endMs)),
+    orderBy('startAt', 'asc')
+  ));
+  return snap.docs
+    .map((d) => {
+      const data = d.data();
+      return {
+        id: d.id,
+        mode: data.mode,
+        startMs: toMs(data.startAt),
+        endMs: toMs(data.endAt),
+        ruleClearedMs: toMs(data.ruleClearedAt),
+        levels: (data.levels || [])
+          .map((l) => ({ atMs: toMs(l.at), level: l.level }))
+          .filter((l) => l.atMs != null),
+        peakLevel: data.peakLevel,
+        dataQuality: data.dataQuality,
+      };
+    })
+    .filter((e) => e.startMs != null && (e.endMs == null || e.endMs >= startMs));
 };

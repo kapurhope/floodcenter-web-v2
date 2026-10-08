@@ -305,6 +305,41 @@ export const sumMm = (points) => points.reduce((sum, p) => sum + p.mm, 0);
 export const maxMm = (points) => points.reduce((max, p) => (max == null || p.mm > max ? p.mm : max), null);
 
 /**
+ * alert_history episodes → chart bands [{ startMs, endMs, level, hold, replay }]
+ * clipped to [fromMs, toMs]. An open episode runs to nowMs. The 6 h hold-down
+ * after the rain rule cleared is its own band (hold: true). Replayed episodes
+ * that overlap a live one are dropped, so live history wins.
+ */
+export const alertBands = (episodes, fromMs, toMs, nowMs) => {
+  const ends = (e) => e.endMs ?? nowMs;
+  const live = episodes.filter((e) => e.mode === 'live');
+  const bands = [];
+  const push = (startMs, endMs, level, hold, replay) => {
+    const s = Math.max(startMs, fromMs);
+    const t = Math.min(endMs, toMs);
+    if (t > s) bands.push({ startMs: s, endMs: t, level, hold, replay });
+  };
+
+  for (const e of episodes) {
+    const endMs = ends(e);
+    const replay = e.mode !== 'live';
+    if (replay && live.some((l) => l.startMs < endMs && ends(l) > e.startMs)) continue;
+    const levels = e.levels.length ? e.levels : [{ atMs: e.startMs, level: e.peakLevel }];
+    levels.forEach((l, i) => {
+      const segEnd = i + 1 < levels.length ? levels[i + 1].atMs : endMs;
+      const clearedMs = e.ruleClearedMs;
+      if (clearedMs != null && clearedMs > l.atMs && clearedMs < segEnd) {
+        push(l.atMs, clearedMs, l.level, false, replay);
+        push(clearedMs, segEnd, l.level, true, replay);
+      } else {
+        push(l.atMs, segEnd, l.level, false, replay);
+      }
+    });
+  }
+  return bands.sort((a, b) => a.startMs - b.startMs);
+};
+
+/**
  * canal_forecasts doc → [{ t, mm }] up to the 6 h horizon, or [] when the
  * doc is missing or stale.
  */
