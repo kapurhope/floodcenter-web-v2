@@ -42,6 +42,7 @@ import {
   expandDailyDocs,
   FORECAST_HORIZON_HOURS,
   forecastSeries,
+  localDayBounds,
   maxByBucket,
   maxMm,
   normalizeRainRows,
@@ -57,6 +58,9 @@ import {
 import './Dashboard.css';
 
 const TOOLTIP_MAX_PX = 40;
+/** Pointer travel past which a click is the end of a drag or pinch, not a day pick. */
+const CLICK_SLOP_PX = 5;
+const HALF_DAY_MS = 12 * 60 * 60 * 1000;
 /** Floor for rain axis suggestedMax so drizzle doesn't stretch to fill the plot. */
 const RAIN_AXIS_MIN_MM = 0.5;
 
@@ -147,6 +151,11 @@ const defaultCustomRange = () => {
 
 const formatTime = (ms) => (ms == null ? '—' : new Date(ms).toLocaleString());
 
+const inChartArea = (chart, e) => {
+  const { left, right, top, bottom } = chart.chartArea;
+  return e.x >= left && e.x <= right && e.y >= top && e.y <= bottom;
+};
+
 const formatAxisNumber = (value) => String(Number(Number(value).toFixed(2)));
 
 /** Rewrites "12.0 mm" in backend reason text into the selected rain unit. */
@@ -183,7 +192,11 @@ const SensorDashboard = ({ deviceId, sensor: sensorFromList, unitSystem, onUnitS
   const [fetchedSensor, setFetchedSensor] = useState(null);
   const [status, setStatus] = useState({ latest: null, alert: null, forecast: null });
   const [history, setHistory] = useState({ key: null });
+  // { view, customDraft, customApplied } to restore when leaving a drilled-down day.
+  const [drillFrom, setDrillFrom] = useState(null);
   const chartRef = useRef(null);
+  const pointerDownRef = useRef(null);
+  const chartClickRef = useRef(null);
 
   const sensor = sensorFromList || fetchedSensor;
   const viewKey = view === 'custom'
@@ -414,6 +427,8 @@ const SensorDashboard = ({ deviceId, sensor: sensorFromList, unitSystem, onUnitS
     return { datasets };
   }, [series, unitSystem, yellowMm, redMm]);
 
+  const drillable = !!VIEWS[view].drillDown;
+
   const chartOptions = useMemo(() => {
     if (!series) return null;
     const { range: r } = series;
@@ -434,6 +449,10 @@ const SensorDashboard = ({ deviceId, sensor: sensorFromList, unitSystem, onUnitS
       responsive: true,
       maintainAspectRatio: false,
       interaction: { mode: 'nearestPerDataset', intersect: false },
+      onClick: (e, elements, chart) => chartClickRef.current?.(e, chart),
+      onHover: (e, elements, chart) => {
+        chart.canvas.style.cursor = drillable && inChartArea(chart, e) ? 'pointer' : 'default';
+      },
       plugins: {
         alertBands: { bands: series.bands },
         legend: {
@@ -504,22 +523,50 @@ const SensorDashboard = ({ deviceId, sensor: sensorFromList, unitSystem, onUnitS
         },
       },
     };
-  }, [series, unitSystem, yellowMm, redMm]);
+  }, [series, unitSystem, yellowMm, redMm, drillable]);
+
+  chartClickRef.current = (e, chart) => {
+    if (!drillable || !series || !inChartArea(chart, e)) return;
+    const native = e.native;
+    if (!native || native.ctrlKey || native.shiftKey || native.metaKey) return;
+    const down = pointerDownRef.current;
+    if (down && Math.hypot(native.clientX - down.x, native.clientY - down.y) > CLICK_SLOP_PX) return;
+    const { nowMs, bucketMinutes: chartBucketMinutes } = series.range;
+    let ms = chart.scales.x.getValueForPixel(e.x);
+    // Daily points sit at local midnight, so snap to the nearest one rather than the day under the cursor.
+    if (chartBucketMinutes >= 24 * 60) ms += HALF_DAY_MS;
+    const { startMs } = localDayBounds(Math.min(ms, nowMs), nowMs);
+    const day = toDateInputValue(new Date(startMs));
+    setDrillFrom({ view, customDraft, customApplied });
+    setCustomDraft({ from: day, to: day });
+    setCustomApplied({ from: day, to: day });
+    setView('custom');
+  };
+
+  const backFromDrill = () => {
+    setCustomDraft(drillFrom.customDraft);
+    setCustomApplied(drillFrom.customApplied);
+    setView(drillFrom.view);
+    setDrillFrom(null);
+  };
 
   const selectView = (next) => {
+    if (next !== view) setDrillFrom(null);
     setView(next);
     if (next === 'custom' && !customApplied && !customError) setCustomApplied({ ...customDraft });
   };
 
   const applyCustomRange = () => {
     if (customError) return;
+    setDrillFrom(null);
     setCustomApplied({ ...customDraft });
     setView('custom');
   };
 
   const bucketMinutes = (shown?.range || range)?.bucketMinutes;
   const bucketLabel = bucketMinutes >= 24 * 60 ? '1 day' : `${bucketMinutes} min`;
-  const viewNote = `${VIEWS[view].note}${bucketMinutes ? ` Display bucket ≈ ${bucketLabel}.` : ''}`;
+  const drillHint = drillable ? ' Click a day on the chart to open it at 5‑minute detail.' : '';
+  const viewNote = `${VIEWS[view].note}${bucketMinutes ? ` Display bucket ≈ ${bucketLabel}.` : ''}${drillHint}`;
 
   let forecastNote = 'forecast hidden on this view';
   if (series?.range.showForecast) {
@@ -647,6 +694,11 @@ const SensorDashboard = ({ deviceId, sensor: sensorFromList, unitSystem, onUnitS
 
         {view === 'custom' && (
           <div className="custom-range-row">
+            {drillFrom && (
+              <button type="button" className="range-btn" onClick={backFromDrill}>
+                ← Back to {VIEWS[drillFrom.view].label}
+              </button>
+            )}
             <label>
               From{' '}
               <input
@@ -680,7 +732,14 @@ const SensorDashboard = ({ deviceId, sensor: sensorFromList, unitSystem, onUnitS
 
         <div className="view-note">{viewNote}</div>
 
-        <div className="chart-container">{chartBody}</div>
+        <div
+          className="chart-container"
+          onPointerDownCapture={(e) => {
+            pointerDownRef.current = { x: e.clientX, y: e.clientY };
+          }}
+        >
+          {chartBody}
+        </div>
 
         {bands.length > 0 && (
           <div className="alert-band-legend">

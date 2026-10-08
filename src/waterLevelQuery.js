@@ -36,6 +36,7 @@ export const VIEWS = {
     hoursBack: 24 * 7,
     showForecast: false,
     timeUnit: 'day',
+    drillDown: true,
   },
   '2weeks': {
     label: '2 Weeks',
@@ -44,6 +45,7 @@ export const VIEWS = {
     hoursBack: 24 * 14,
     showForecast: false,
     timeUnit: 'day',
+    drillDown: true,
   },
   month: {
     label: 'Month',
@@ -52,6 +54,7 @@ export const VIEWS = {
     hoursBack: 24 * 30,
     showForecast: false,
     timeUnit: 'day',
+    drillDown: true,
   },
   year: {
     label: 'Year',
@@ -60,6 +63,7 @@ export const VIEWS = {
     hoursBack: 24 * 365,
     showForecast: false,
     timeUnit: 'month',
+    drillDown: true,
   },
   custom: {
     label: 'Custom',
@@ -96,12 +100,28 @@ const endOfLocalDay = (date) => {
   return d;
 };
 
+/** Local calendar day containing ms: midnight to end of day, clamped to nowMs. */
+export const localDayBounds = (ms, nowMs = Date.now()) => {
+  const start = new Date(ms);
+  start.setHours(0, 0, 0, 0);
+  return { startMs: start.getTime(), endMs: Math.min(endOfLocalDay(start).getTime(), nowMs) };
+};
+
+/** Display bucket for a custom range spanning `days` calendar days. */
 export const customBucketMinutes = (days) => {
   if (days > 120) return 24 * 60;
   if (days > 40) return 180;
   if (days > 14) return 60;
-  return 30;
+  if (days > 1) return 30;
+  return 5;
 };
+
+/** Inclusive count of local calendar days from one date to another; DST-safe. */
+const calendarDays = (from, to) =>
+  Math.round(
+    (Date.UTC(to.getFullYear(), to.getMonth(), to.getDate())
+      - Date.UTC(from.getFullYear(), from.getMonth(), from.getDate())) / DAY_MS
+  ) + 1;
 
 /** Returns an error message for a From/To pair, or null if it is usable. */
 export const validateCustomRange = ({ from, to }, now = new Date()) => {
@@ -136,7 +156,7 @@ export const rangeForView = (view, { now, custom } = {}) => {
       endMs,
       xMaxMs,
       nowMs,
-      bucketMinutes: customBucketMinutes(Math.max(1, (endMs - startMs) / DAY_MS)),
+      bucketMinutes: customBucketMinutes(calendarDays(parseDateInput(custom.from), parseDateInput(custom.to))),
       showForecast,
       timeUnit,
     };

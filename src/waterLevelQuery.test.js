@@ -2,9 +2,11 @@ import {
   alertBands,
   appendLatest,
   breakAtGaps,
+  customBucketMinutes,
   dailyDocBounds,
   expandDailyDocs,
   forecastSeries,
+  localDayBounds,
   maxByBucket,
   maxMm,
   normalizeRainRows,
@@ -72,6 +74,34 @@ test('custom range uses local days, clamps to now and shows forecast only when s
 
   expect(rangeForView('custom', { now: NOW, custom: { from: '2026-10-05', to: '2026-10-01' } })).toBeNull();
   expect(validateCustomRange({ from: '', to: '2026-10-01' }, new Date(NOW))).toMatch(/both/);
+});
+
+test('local day bounds run midnight to end of day, clamped to now', () => {
+  const past = localDayBounds(new Date(2026, 8, 12, 17, 30).getTime(), NOW);
+  expect(past).toEqual({
+    startMs: new Date(2026, 8, 12).getTime(),
+    endMs: new Date(2026, 8, 12, 23, 59, 59, 999).getTime(),
+  });
+  expect(localDayBounds(NOW - HOUR, NOW)).toEqual({ startMs: new Date(2026, 9, 5).getTime(), endMs: NOW });
+  expect(localDayBounds(new Date(2026, 8, 12).getTime(), NOW).startMs).toBe(new Date(2026, 8, 12).getTime());
+});
+
+test('a single-day custom range draws 5-minute buckets', () => {
+  expect(customBucketMinutes(1)).toBe(5);
+  expect(customBucketMinutes(2)).toBe(30);
+  expect(customBucketMinutes(14)).toBe(30);
+  expect(customBucketMinutes(15)).toBe(60);
+
+  const day = rangeForView('custom', { now: NOW, custom: { from: '2026-09-12', to: '2026-09-12' } });
+  expect(day).toMatchObject({
+    ...localDayBounds(new Date(2026, 8, 12, 12).getTime(), NOW),
+    bucketMinutes: 5,
+    showForecast: false,
+    timeUnit: 'hour',
+  });
+  expect(rangeForView('custom', { now: NOW, custom: { from: '2026-10-05', to: '2026-10-05' } }).bucketMinutes).toBe(5);
+  // Fall-back DST day is 25 h long in zones that observe it; still one calendar day.
+  expect(rangeForView('custom', { now: NOW, custom: { from: '2025-11-02', to: '2025-11-02' } }).bucketMinutes).toBe(5);
 });
 
 test('daily doc bounds are UTC midnights', () => {
